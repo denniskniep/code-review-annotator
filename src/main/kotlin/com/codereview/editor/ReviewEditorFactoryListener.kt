@@ -88,8 +88,15 @@ private class ReviewEditorFactoryListenerImpl : EditorFactoryListener {
             }
         }
 
-        log.warn("[CodeReview] editorCreated: matchedPath=$matchedPath, editor=${System.identityHashCode(editor)}, commentsForPath=${session.comments.count { it.filePath == matchedPath }}")
-        InlineCommentManager.reapplyInlineComments(project, editor, matchedPath)
+        // A diff view's "before" side is backed by a synthetic in-memory VirtualFile
+        // (e.g. DiffContentFactoryImpl's light file), not the real file on disk — it
+        // can fire editorCreated before the "after"/live side does. Only the real,
+        // on-disk file is eligible to consume a pending scroll request: otherwise the
+        // before-side editor (wrong content, possibly different line numbers) steals it
+        // and the live editor the user is actually looking at never gets scrolled.
+        val isLocalFile = vfile?.isInLocalFileSystem() == true
+        log.warn("[CodeReview] editorCreated: matchedPath=$matchedPath, editor=${System.identityHashCode(editor)}, commentsForPath=${session.comments.count { it.filePath == matchedPath }}, isLocalFile=$isLocalFile")
+        InlineCommentManager.reapplyInlineComments(project, editor, matchedPath, allowScroll = isLocalFile)
 
         if (editor.getUserData(CLICK_HANDLER_INSTALLED) != true) {
             editor.addEditorMouseListener(InlineCommentClickHandler(project))

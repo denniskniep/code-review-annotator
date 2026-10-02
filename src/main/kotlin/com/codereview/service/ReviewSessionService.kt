@@ -2,6 +2,7 @@ package com.codereview.service
 
 import com.codereview.model.*
 import com.intellij.openapi.components.*
+import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.util.messages.Topic
 import com.intellij.util.xmlb.annotations.Tag
@@ -32,6 +33,8 @@ class ReviewSessionService(private val project: Project) : PersistentStateCompon
         @Tag("lineStart") var lineStart: Int? = null
         @Tag("lineEnd") var lineEnd: Int? = null
         @Tag("createdAt") var createdAt: Long = 0L
+        @Tag("author") var author: String? = null
+        @Tag("publishedDate") var publishedDate: String? = null
     }
 
     class State {
@@ -42,9 +45,14 @@ class ReviewSessionService(private val project: Project) : PersistentStateCompon
         @XCollection(elementName = "comment") var comments: MutableList<CommentState> = mutableListOf()
     }
 
+    private val log = Logger.getInstance(ReviewSessionService::class.java)
+
     private var session: ReviewSession = ReviewSession()
 
     val currentSession: ReviewSession get() = session
+
+    /** Path of the last JSON file loaded via Import, proposed as the default Save target. */
+    var lastLoadedJsonPath: String? = null
 
     private fun fireCommentsChanged() {
         project.messageBus.syncPublisher(ReviewCommentListener.TOPIC).commentsChanged()
@@ -74,6 +82,12 @@ class ReviewSessionService(private val project: Project) : PersistentStateCompon
         session = session.copy(summary = text)
     }
 
+    fun loadSession(newSession: ReviewSession) {
+        session = newSession
+        log.warn("[CodeReview] ReviewSessionService.loadSession: project=${project.name}, sessionId=${session.id}, comments=${session.comments.size}")
+        fireCommentsChanged()
+    }
+
     fun clearSession() {
         session = ReviewSession()
         fireCommentsChanged()
@@ -95,6 +109,8 @@ class ReviewSessionService(private val project: Project) : PersistentStateCompon
                 lineStart = c.lineStart
                 lineEnd = c.lineEnd
                 createdAt = c.createdAt
+                author = c.author
+                publishedDate = c.publishedDate
             }
         }.toMutableList()
         return state
@@ -110,7 +126,9 @@ class ReviewSessionService(private val project: Project) : PersistentStateCompon
                 filePath = c.filePath,
                 lineStart = c.lineStart,
                 lineEnd = c.lineEnd,
-                createdAt = c.createdAt
+                createdAt = c.createdAt,
+                author = c.author,
+                publishedDate = c.publishedDate
             )
         }.toMutableList()
         // Migrate legacy REVIEW-scoped comments into the summary field

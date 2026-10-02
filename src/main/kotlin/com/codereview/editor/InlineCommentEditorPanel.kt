@@ -1,27 +1,35 @@
 package com.codereview.editor
 
 import com.codereview.model.CommentType
+import com.codereview.model.formatPublishedDate
+import com.codereview.ui.MarkdownEditorPanel
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.ui.JBColor
-import com.intellij.ui.components.JBScrollPane
 import java.awt.*
 import javax.swing.*
 
+/**
+ * Implements [Disposable] purely as the parent scope for the embedded
+ * markdown preview's JCEF browser — [InlineCommentManager] disposes this
+ * when the popup hosting it closes, releasing the browser instance.
+ */
 class InlineCommentEditorPanel(
+    project: Project,
     initialType: CommentType = CommentType.ISSUE,
     initialText: String = "",
+    author: String? = null,
+    publishedDate: String? = null,
     private val onSave: (CommentType, String) -> Unit,
     private val onCancel: () -> Unit
-) : JPanel(BorderLayout(0, 4)) {
+) : JPanel(BorderLayout(0, 4)), Disposable {
 
     private val typeCombo = ComboBox(CommentType.entries.toTypedArray()).apply {
         selectedItem = initialType
     }
-    val textArea: JTextArea = JTextArea(initialText, 4, 60).apply {
-        lineWrap = true
-        wrapStyleWord = true
-        font = UIManager.getFont("EditorPane.font") ?: font
-    }
+    private val markdownEditor = MarkdownEditorPanel(this, initialText)
+    val textArea: JTextArea get() = markdownEditor.textArea
 
     init {
         border = BorderFactory.createCompoundBorder(
@@ -48,6 +56,7 @@ class InlineCommentEditorPanel(
                 val cancelBtn = JButton("Cancel").apply {
                     addActionListener { cancel() }
                 }
+                add(markdownEditor.toggleButton)
                 add(saveBtn)
                 add(cancelBtn)
             }
@@ -55,17 +64,16 @@ class InlineCommentEditorPanel(
         }
         add(topBar, BorderLayout.NORTH)
 
-        val scrollPane = JBScrollPane(textArea).apply {
-            preferredSize = Dimension(0, 80)
-        }
-        add(scrollPane, BorderLayout.CENTER)
+        markdownEditor.preferredSize = Dimension(0, 100)
+        add(markdownEditor, BorderLayout.CENTER)
 
-        val hintLabel = JLabel("Ctrl+Enter to save, Escape to cancel").apply {
+        val authorDateText = listOfNotNull(author, formatPublishedDate(publishedDate)).joinToString(" · ")
+        val authorDateLabel = JLabel(authorDateText, SwingConstants.RIGHT).apply {
             foreground = JBColor(Color(140, 140, 140), Color(120, 120, 120))
             font = font.deriveFont(font.size2D - 1)
             border = BorderFactory.createEmptyBorder(4, 0, 0, 0)
         }
-        add(hintLabel, BorderLayout.SOUTH)
+        add(authorDateLabel, BorderLayout.SOUTH)
 
         // Update accent bar color on type change
         typeCombo.addActionListener {
@@ -103,6 +111,8 @@ class InlineCommentEditorPanel(
     private fun cancel() {
         onCancel()
     }
+
+    override fun dispose() {}
 
     companion object {
         fun accentColorFor(type: CommentType): Color = when (type) {

@@ -36,6 +36,11 @@ class AddCommentGutterHoverHandler(private val project: Project) : EditorMouseMo
             return
         }
 
+        if (InlineCommentManager.isLineCollapsed(editor, line)) {
+            clearHighlighter(editor)
+            return
+        }
+
         if (line == currentLine) return
 
         clearHighlighter(editor)

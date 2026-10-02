@@ -18,6 +18,7 @@
     <depends>com.intellij.modules.platform</depends>
     <depends>com.intellij.modules.vcs</depends>
     <depends>org.jetbrains.plugins.terminal</depends>
+    <depends>com.intellij.modules.jcef</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <projectService serviceImplementation="com.codereview.service.ReviewSessionService"/>
@@ -50,10 +51,35 @@
             <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift alt E"/>
         </action>
 
+        <action id="CodeReview.SaveJsonToFile"
+                class="com.codereview.actions.SaveJsonToFileAction"
+                text="Save Review as JSON..."
+                description="Save all review comments as JSON to a file">
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift alt J"/>
+        </action>
+
+        <action id="CodeReview.ImportJsonFromFile"
+                class="com.codereview.actions.ImportJsonFromFileAction"
+                text="Load Review from JSON File..."
+                description="Load review comments from a JSON file into the current session">
+        </action>
+
         <action id="CodeReview.ClearSession"
                 class="com.codereview.actions.ClearSessionAction"
                 text="Clear Session"
                 description="Clear all review comments">
+        </action>
+
+        <action id="CodeReview.CollapseAllComments"
+                class="com.codereview.actions.CollapseAllCommentsAction"
+                text="Collapse All Comments"
+                description="Collapse all inline review comment boxes in the editor">
+        </action>
+
+        <action id="CodeReview.ExpandAllComments"
+                class="com.codereview.actions.ExpandAllCommentsAction"
+                text="Expand All Comments"
+                description="Expand all inline review comment boxes in the editor">
         </action>
 
         <action id="CodeReview.ExportToTerminal"
@@ -85,7 +111,11 @@
         <group id="CodeReview.ToolWindowToolbar">
             <reference ref="CodeReview.ExportToTerminal"/>
             <reference ref="CodeReview.ExportToClipboard"/>
+            <reference ref="CodeReview.SaveJsonToFile"/>
+            <reference ref="CodeReview.ImportJsonFromFile"/>
             <reference ref="CodeReview.ClearSession"/>
+            <reference ref="CodeReview.CollapseAllComments"/>
+            <reference ref="CodeReview.ExpandAllComments"/>
         </group>
     </actions>
 </idea-plugin>

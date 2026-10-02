@@ -6,7 +6,7 @@ import com.codereview.toolwindow.ReviewToolWindowFactory
 import com.intellij.openapi.editor.event.EditorMouseEvent
 import com.intellij.openapi.editor.event.EditorMouseListener
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.openapi.ui.Messages
 import java.awt.Rectangle
 
 class InlineCommentClickHandler(private val project: Project) : EditorMouseListener {
@@ -43,6 +43,32 @@ class InlineCommentClickHandler(private val project: Project) : EditorMouseListe
                 }
             }
 
+            val previewBounds = renderer.previewLinkBounds
+            if (previewBounds != null) {
+                val previewRect = Rectangle(
+                    previewBounds.x, bounds.y + previewBounds.y,
+                    previewBounds.width, previewBounds.height
+                )
+                if (previewRect.contains(point)) {
+                    InlineCommentManager.togglePreview(project, editor, comment)
+                    event.consume()
+                    return
+                }
+            }
+
+            val collapseBounds = renderer.collapseLinkBounds
+            if (collapseBounds != null) {
+                val collapseRect = Rectangle(
+                    collapseBounds.x, bounds.y + collapseBounds.y,
+                    collapseBounds.width, collapseBounds.height
+                )
+                if (collapseRect.contains(point)) {
+                    InlineCommentManager.setCollapsed(project, editor, comment, true)
+                    event.consume()
+                    return
+                }
+            }
+
             val deleteBounds = renderer.deleteLinkBounds
             if (deleteBounds != null) {
                 val deleteRect = Rectangle(
@@ -56,26 +82,9 @@ class InlineCommentClickHandler(private val project: Project) : EditorMouseListe
                 }
             }
 
-            // Click on inlay body — show popup menu
-            showPopupMenu(event, comment)
-            event.consume()
+            // Click on inlay body outside any icon — no action
             return
         }
-    }
-
-    private fun showPopupMenu(event: EditorMouseEvent, comment: ReviewComment) {
-        val items = listOf("Edit Comment", "Delete Comment")
-        JBPopupFactory.getInstance()
-            .createPopupChooserBuilder(items)
-            .setTitle("[${comment.type.name}] ${comment.text.take(40)}")
-            .setItemChosenCallback { chosen ->
-                when (chosen) {
-                    "Edit Comment" -> editComment(event.editor, comment)
-                    "Delete Comment" -> deleteComment(comment)
-                }
-            }
-            .createPopup()
-            .showInBestPositionFor(event.editor)
     }
 
     private fun editComment(editor: com.intellij.openapi.editor.Editor, comment: ReviewComment) {
@@ -103,6 +112,14 @@ class InlineCommentClickHandler(private val project: Project) : EditorMouseListe
     }
 
     private fun deleteComment(comment: ReviewComment) {
+        val result = Messages.showYesNoDialog(
+            project,
+            "Are you sure you want to delete this comment?",
+            "Delete Comment",
+            Messages.getQuestionIcon()
+        )
+        if (result != Messages.YES) return
+
         InlineCommentManager.removeInlineComment(comment.id)
         ReviewSessionService.getInstance(project).removeComment(comment.id)
         ReviewToolWindowFactory.refreshPanel(project)

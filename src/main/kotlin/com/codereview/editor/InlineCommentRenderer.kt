@@ -2,20 +2,29 @@ package com.codereview.editor
 
 import com.codereview.model.CommentType
 import com.codereview.model.ReviewComment
+import com.codereview.ui.MarkdownRenderer
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.editor.EditorCustomElementRenderer
 import com.intellij.openapi.editor.Inlay
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.ui.JBColor
 import java.awt.*
+import javax.swing.JEditorPane
 
-enum class HoveredButton { NONE, EDIT, DELETE }
+enum class HoveredButton { NONE, EDIT, PREVIEW, COLLAPSE, DELETE }
 
-class InlineCommentRenderer(val comment: ReviewComment) : EditorCustomElementRenderer {
+class InlineCommentRenderer(
+    val comment: ReviewComment,
+    val previewMode: Boolean = false
+) : EditorCustomElementRenderer {
 
     var editLinkBounds: Rectangle? = null
         private set
+    var previewLinkBounds: Rectangle? = null
+        private set
     var deleteLinkBounds: Rectangle? = null
+        private set
+    var collapseLinkBounds: Rectangle? = null
         private set
     var hoveredButton: HoveredButton = HoveredButton.NONE
 
@@ -53,12 +62,26 @@ class InlineCommentRenderer(val comment: ReviewComment) : EditorCustomElementRen
 
     override fun calcHeightInPixels(inlay: Inlay<*>): Int {
         val editor = inlay.editor
-        val font = editor.colorsScheme.getFont(com.intellij.openapi.editor.colors.EditorFontType.PLAIN)
-        val metrics = editor.component.getFontMetrics(font)
         val availableWidth = calcWidthInPixels(inlay) - ACCENT_BAR_WIDTH - PADDING_LEFT - PADDING_RIGHT - 10
-        val wrappedLineCount = wrapText(comment.text, metrics, availableWidth.coerceAtLeast(100))
-        val textHeight = wrappedLineCount * metrics.height
-        return PADDING_TOP + BADGE_HEIGHT + GAP_BADGE_TEXT + textHeight + PADDING_BOTTOM
+        val contentHeight = if (previewMode) {
+            buildPreviewPane(availableWidth.coerceAtLeast(100)).preferredSize.height
+        } else {
+            val font = editor.colorsScheme.getFont(com.intellij.openapi.editor.colors.EditorFontType.PLAIN)
+            val metrics = editor.component.getFontMetrics(font)
+            val wrappedLineCount = wrapText(comment.text, metrics, availableWidth.coerceAtLeast(100))
+            wrappedLineCount * metrics.height
+        }
+        return PADDING_TOP + BADGE_HEIGHT + GAP_BADGE_TEXT + contentHeight + PADDING_BOTTOM
+    }
+
+    // ponytail: renders markdown preview via a detached JEditorPane painted onto the inlay's
+    // Graphics2D (EditorCustomElementRenderer has no live Swing component tree to embed into,
+    // so JCEFHtmlPanel — used elsewhere for markdown preview — isn't paintable here).
+    private fun buildPreviewPane(width: Int): JEditorPane {
+        val pane = JEditorPane("text/html", MarkdownRenderer.toThemedHtml(comment.text, backgroundColor))
+        pane.isOpaque = false
+        pane.setSize(width, Short.MAX_VALUE.toInt())
+        return pane
     }
 
     override fun paint(inlay: Inlay<*>, g: Graphics, targetRegion: Rectangle, textAttributes: TextAttributes) {
@@ -101,7 +124,7 @@ class InlineCommentRenderer(val comment: ReviewComment) : EditorCustomElementRen
 
         // Action icon buttons (top-right after badge)
         val editIcon = AllIcons.General.Inline_edit
-        val deleteIcon = AllIcons.General.Remove
+        val deleteIcon = AllIcons.Actions.GC
         val iconW = editIcon.iconWidth
         val iconH = editIcon.iconHeight
         val iconBtnW = iconW + ICON_BTN_PAD * 2
@@ -116,7 +139,25 @@ class InlineCommentRenderer(val comment: ReviewComment) : EditorCustomElementRen
         editIcon.paintIcon(inlay.editor.component, g2, editBtnX + ICON_BTN_PAD, currentY + iconOffsetY)
         editLinkBounds = Rectangle(editBtnX, currentY - y, iconBtnW, BADGE_HEIGHT)
 
-        val deleteBtnX = editBtnX + iconBtnW + ICON_GAP
+        val previewIcon = if (previewMode) AllIcons.General.LayoutEditorOnly else AllIcons.General.LayoutPreviewOnly
+        val previewBtnX = editBtnX + iconBtnW + ICON_GAP
+        if (hoveredButton == HoveredButton.PREVIEW) {
+            g2.color = hoverColor
+            g2.fillRoundRect(previewBtnX, currentY, iconBtnW, BADGE_HEIGHT, 4, 4)
+        }
+        previewIcon.paintIcon(inlay.editor.component, g2, previewBtnX + ICON_BTN_PAD, currentY + iconOffsetY)
+        previewLinkBounds = Rectangle(previewBtnX, currentY - y, iconBtnW, BADGE_HEIGHT)
+
+        val collapseIcon = AllIcons.Actions.Collapseall
+        val collapseBtnX = previewBtnX + iconBtnW + ICON_GAP
+        if (hoveredButton == HoveredButton.COLLAPSE) {
+            g2.color = hoverColor
+            g2.fillRoundRect(collapseBtnX, currentY, iconBtnW, BADGE_HEIGHT, 4, 4)
+        }
+        collapseIcon.paintIcon(inlay.editor.component, g2, collapseBtnX + ICON_BTN_PAD, currentY + iconOffsetY)
+        collapseLinkBounds = Rectangle(collapseBtnX, currentY - y, iconBtnW, BADGE_HEIGHT)
+
+        val deleteBtnX = x + width - PADDING_RIGHT - iconBtnW
         if (hoveredButton == HoveredButton.DELETE) {
             g2.color = hoverColor
             g2.fillRoundRect(deleteBtnX, currentY, iconBtnW, BADGE_HEIGHT, 4, 4)
@@ -126,13 +167,21 @@ class InlineCommentRenderer(val comment: ReviewComment) : EditorCustomElementRen
 
         currentY += BADGE_HEIGHT + GAP_BADGE_TEXT
 
-        // Wrapped comment text
-        g2.font = font
-        g2.color = JBColor(Color(50, 50, 50), Color(200, 200, 200))
-        val lines = wrapTextToLines(comment.text, metrics, availableWidth.coerceAtLeast(100))
-        for (line in lines) {
-            g2.drawString(line, contentX, currentY + metrics.ascent)
-            currentY += metrics.height
+        if (previewMode) {
+            val pane = buildPreviewPane(availableWidth.coerceAtLeast(100))
+            pane.setSize(pane.width, pane.preferredSize.height)
+            val paneGraphics = g2.create(contentX, currentY, pane.width, pane.height) as Graphics2D
+            pane.paint(paneGraphics)
+            paneGraphics.dispose()
+        } else {
+            // Wrapped comment text
+            g2.font = font
+            g2.color = JBColor(Color(50, 50, 50), Color(200, 200, 200))
+            val lines = wrapTextToLines(comment.text, metrics, availableWidth.coerceAtLeast(100))
+            for (line in lines) {
+                g2.drawString(line, contentX, currentY + metrics.ascent)
+                currentY += metrics.height
+            }
         }
 
         g2.dispose()

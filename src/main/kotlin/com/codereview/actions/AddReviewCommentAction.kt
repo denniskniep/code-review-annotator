@@ -5,13 +5,14 @@ import com.codereview.model.CommentType
 import com.codereview.model.ReviewComment
 import com.codereview.service.ReviewSessionService
 import com.codereview.toolwindow.ReviewToolWindowFactory
+import com.codereview.ui.MarkdownEditorPanel
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ComboBox
-import com.intellij.ui.components.JBScrollPane
+import com.intellij.openapi.util.Disposer
 import java.awt.BorderLayout
 import java.awt.Dimension
 import javax.swing.*
@@ -49,17 +50,20 @@ class CommentDialog(
     private val typeCombo = ComboBox(CommentType.entries.toTypedArray()).apply {
         selectedItem = initialType
     }
-    private val textArea = JTextArea(initialText, 6, 50).apply {
-        lineWrap = true
-        wrapStyleWord = true
-    }
+    private val previewDisposable = Disposer.newDisposable()
+    private val markdownEditor = MarkdownEditorPanel(previewDisposable, initialText)
 
     val selectedType: CommentType get() = typeCombo.selectedItem as CommentType
-    val commentText: String get() = textArea.text.trim()
+    val commentText: String get() = markdownEditor.text.trim()
 
     init {
         this.title = title
         init()
+    }
+
+    override fun dispose() {
+        Disposer.dispose(previewDisposable)
+        super.dispose()
     }
 
     override fun createCenterPanel(): JComponent {
@@ -76,17 +80,17 @@ class CommentDialog(
             val typeRow = JPanel(BorderLayout(4, 0))
             typeRow.add(JLabel("Type:"), BorderLayout.WEST)
             typeRow.add(typeCombo, BorderLayout.CENTER)
+            typeRow.add(markdownEditor.toggleButton, BorderLayout.EAST)
             add(typeRow)
         }
         panel.add(topPanel, BorderLayout.NORTH)
 
-        val scrollPane = JBScrollPane(textArea)
-        scrollPane.preferredSize = Dimension(400, 150)
+        markdownEditor.preferredSize = Dimension(400, 150)
         panel.add(JLabel("Comment:"), BorderLayout.WEST)
-        panel.add(scrollPane, BorderLayout.CENTER)
+        panel.add(markdownEditor, BorderLayout.CENTER)
 
         return panel
     }
 
-    override fun getPreferredFocusedComponent(): JComponent = textArea
+    override fun getPreferredFocusedComponent(): JComponent = markdownEditor.textArea
 }

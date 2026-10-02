@@ -5,8 +5,11 @@ import com.codereview.model.CommentScope
 import com.codereview.model.CommentType
 import com.codereview.model.ReviewComment
 import com.codereview.service.ReviewSessionService
+import com.codereview.ui.MarkdownEditorPanel
 import com.intellij.diff.DiffDialogHints
 import com.intellij.diff.DiffManager
+import com.intellij.openapi.editor.LogicalPosition
+import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.project.Project
@@ -22,6 +25,7 @@ import com.intellij.ui.JBColor
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.content.ContentFactory
+import com.intellij.openapi.diagnostic.Logger
 import java.awt.*
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
@@ -38,25 +42,31 @@ class ReviewToolWindowFactory : ToolWindowFactory {
 
         val actionGroup = ActionManager.getInstance()
             .getAction("CodeReview.ToolWindowToolbar") as? com.intellij.openapi.actionSystem.ActionGroup
-        val wrapper = JPanel(BorderLayout())
+        val commentsWrapper = JPanel(BorderLayout())
         if (actionGroup != null) {
             val toolbar = ActionManager.getInstance()
                 .createActionToolbar(ActionPlaces.TOOLBAR, actionGroup, true)
-            toolbar.targetComponent = panel
-            wrapper.add(toolbar.component, BorderLayout.NORTH)
+            toolbar.targetComponent = panel.commentsComponent
+            commentsWrapper.add(toolbar.component, BorderLayout.NORTH)
         }
-        wrapper.add(panel, BorderLayout.CENTER)
+        commentsWrapper.add(panel.commentsComponent, BorderLayout.CENTER)
 
-        val content = ContentFactory.getInstance().createContent(wrapper, "Comments", false)
-        toolWindow.contentManager.addContent(content)
+        val contentFactory = ContentFactory.getInstance()
+        val commentsContent = contentFactory.createContent(commentsWrapper, "Comments", false)
+        val summaryContent = contentFactory.createContent(panel.summaryComponent, "Review Summary", false)
+        toolWindow.contentManager.addContent(commentsContent)
+        toolWindow.contentManager.addContent(summaryContent)
         panels[project] = panel
     }
 
     companion object {
+        private val log = Logger.getInstance(ReviewToolWindowFactory::class.java)
         private val panels = mutableMapOf<Project, ReviewPanel>()
 
         fun refreshPanel(project: Project) {
-            panels[project]?.refresh()
+            val panel = panels[project]
+            log.warn("[CodeReview] refreshPanel: found=${panel != null}")
+            panel?.refresh()
         }
     }
 }
@@ -66,17 +76,19 @@ private sealed interface ReviewListItem {
     data class Comment(val comment: ReviewComment) : ReviewListItem
 }
 
-class ReviewPanel(private val project: Project) : JPanel(BorderLayout()) {
+class ReviewPanel(private val project: Project) {
 
     private val listModel = DefaultListModel<ReviewListItem>()
     private val commentList = JBList<ReviewListItem>(listModel)
-    private val summaryArea = JTextArea(4, 0).apply {
-        lineWrap = true
-        wrapStyleWord = true
-        border = BorderFactory.createEmptyBorder(6, 8, 6, 8)
-        toolTipText = "Review summary"
+    private val summaryEditor = MarkdownEditorPanel(project).apply {
+        textArea.border = BorderFactory.createEmptyBorder(6, 8, 6, 8)
+        textArea.toolTipText = "Review summary"
     }
     private var updatingSummary = false
+
+    val commentsComponent: JComponent = JBScrollPane(commentList)
+    lateinit var summaryComponent: JComponent
+        private set
 
     init {
         commentList.cellRenderer = ReviewListCellRenderer()
@@ -144,38 +156,35 @@ class ReviewPanel(private val project: Project) : JPanel(BorderLayout()) {
         })
 
         // Summary area document listener
-        summaryArea.document.addDocumentListener(object : DocumentListener {
+        summaryEditor.textArea.document.addDocumentListener(object : DocumentListener {
             override fun insertUpdate(e: DocumentEvent) = onSummaryChanged()
             override fun removeUpdate(e: DocumentEvent) = onSummaryChanged()
             override fun changedUpdate(e: DocumentEvent) = onSummaryChanged()
         })
 
-        // Bottom panel: label + scrollable text area
-        val summaryLabel = JLabel("Review summary").apply {
-            border = BorderFactory.createEmptyBorder(4, 8, 2, 8)
-            font = font.deriveFont(Font.BOLD)
+        val summaryToolbar = JPanel(BorderLayout()).apply {
+            isOpaque = false
+            add(summaryEditor.toggleButton, BorderLayout.EAST)
         }
-        val summarySeparator = JSeparator(SwingConstants.HORIZONTAL)
-        val summaryScrollPane = JBScrollPane(summaryArea)
-        val bottomPanel = JPanel(BorderLayout()).apply {
-            add(summarySeparator, BorderLayout.NORTH)
-            add(summaryLabel, BorderLayout.CENTER)
-            add(summaryScrollPane, BorderLayout.SOUTH)
+        summaryComponent = JPanel(BorderLayout()).apply {
+            add(summaryToolbar, BorderLayout.NORTH)
+            add(summaryEditor, BorderLayout.CENTER)
         }
 
-        add(JBScrollPane(commentList), BorderLayout.CENTER)
-        add(bottomPanel, BorderLayout.SOUTH)
         refresh()
     }
 
     private fun onSummaryChanged() {
         if (updatingSummary) return
-        ReviewSessionService.getInstance(project).updateSummary(summaryArea.text)
+        ReviewSessionService.getInstance(project).updateSummary(summaryEditor.text)
     }
 
     fun refresh() {
         listModel.clear()
         val session = ReviewSessionService.getInstance(project).currentSession
+        Logger.getInstance(ReviewPanel::class.java).warn(
+            "[CodeReview] ReviewPanel.refresh: sessionId=${session.id}, rawComments=${session.comments.size}"
+        )
         val sorted = session.comments
             .filter { it.scope != CommentScope.REVIEW }
             .sortedWith(
@@ -192,12 +201,15 @@ class ReviewPanel(private val project: Project) : JPanel(BorderLayout()) {
             listModel.addElement(ReviewListItem.Header(groupTitle))
             comments.forEach { listModel.addElement(ReviewListItem.Comment(it)) }
         }
+        Logger.getInstance(ReviewPanel::class.java).warn(
+            "[CodeReview] ReviewPanel.refresh: afterFilter=${sorted.size}, groups=${grouped.size}, listModelSize=${listModel.size()}"
+        )
 
         // Sync summary text area without triggering the document listener
         updatingSummary = true
         try {
-            if (summaryArea.text != session.summary) {
-                summaryArea.text = session.summary
+            if (summaryEditor.text != session.summary) {
+                summaryEditor.text = session.summary
             }
         } finally {
             updatingSummary = false
@@ -205,16 +217,25 @@ class ReviewPanel(private val project: Project) : JPanel(BorderLayout()) {
     }
 
     private fun navigateToComment(comment: ReviewComment) {
+        val navLog = Logger.getInstance(ReviewPanel::class.java)
         val filePath = comment.filePath ?: return
         val basePath = project.basePath ?: return
         val fullPath = "$basePath/$filePath"
         val vf = LocalFileSystem.getInstance().findFileByPath(fullPath) ?: return
         val line = (comment.lineStart ?: 1) - 1
+        val scrollLine = (line - 1).coerceAtLeast(0)
+
+        // DiffManager.showDiff doesn't hand back an Editor to scroll directly, so instead
+        // arm InlineCommentManager to scroll to this comment the moment its inlay lands on
+        // a real editor (diff-side or plain) — see reapplyInlineComments/scrollToComment.
+        InlineCommentManager.requestScroll(comment.id)
 
         // Try to open diff if file has uncommitted changes
         val change = ChangeListManager.getInstance(project).getChange(vf)
+        navLog.warn("[CodeReview] navigateToComment: commentId=${comment.id}, file=$filePath, line=${line + 1}, hasChange=${change != null}")
         if (change != null) {
             val producer = ChangeDiffRequestProducer.create(project, change)
+            navLog.warn("[CodeReview] navigateToComment: diff producer=${producer != null}")
             if (producer != null) {
                 val chain = ChangeDiffRequestChain(listOf(producer), 0)
                 DiffManager.getInstance().showDiff(project, chain, DiffDialogHints.DEFAULT)
@@ -222,9 +243,22 @@ class ReviewPanel(private val project: Project) : JPanel(BorderLayout()) {
             }
         }
 
-        // Fallback: regular file
-        val descriptor = OpenFileDescriptor(project, vf, line.coerceAtLeast(0), 0)
-        FileEditorManager.getInstance(project).openTextEditor(descriptor, true)
+        // Fallback: regular file.
+        val descriptor = OpenFileDescriptor(project, vf, scrollLine, 0)
+        val editor = FileEditorManager.getInstance(project).openTextEditor(descriptor, true)
+        if (editor == null) {
+            navLog.warn("[CodeReview] navigateToComment: openTextEditor returned null")
+            return
+        }
+
+        // If the editor was already open, no new editorCreated event fired, so the
+        // pending-scroll hook above never ran — apply it directly here too (harmless
+        // no-op if it already ran).
+        val scrolled = InlineCommentManager.scrollToComment(editor, comment)
+        navLog.warn("[CodeReview] navigateToComment: direct scrollToComment succeeded=$scrolled")
+        if (!scrolled) {
+            editor.scrollingModel.scrollTo(LogicalPosition(scrollLine, 0), ScrollType.CENTER)
+        }
     }
 
     private fun deleteComment(comment: ReviewComment) {
@@ -383,7 +417,7 @@ private class CommentCellPanel : JPanel() {
         val locationFont = baseFont.deriveFont(Font.PLAIN, baseFont.size2D - 1f)
         g2.font = locationFont
         val locFm = g2.fontMetrics
-        val locationText = formatLocation(comment)
+        val locationText = formatLocation(comment) + formatAuthorAndDate(comment)
         if (isSelectedState) {
             g2.color = listRef?.selectionForeground ?: UIManager.getColor("List.selectionForeground")
         } else {
@@ -450,6 +484,11 @@ private class CommentCellPanel : JPanel() {
             CommentType.ISSUE -> JBColor(Color(255, 245, 245), Color(45, 25, 25))
             CommentType.SUGGESTION -> JBColor(Color(245, 247, 255), Color(25, 28, 45))
             CommentType.NOTE -> JBColor(Color(255, 252, 240), Color(42, 40, 25))
+        }
+
+        private fun formatAuthorAndDate(comment: ReviewComment): String {
+            val parts = listOfNotNull(comment.author, comment.formattedPublishedDate())
+            return if (parts.isEmpty()) "" else " · " + parts.joinToString(" · ")
         }
 
         private fun formatLocation(comment: ReviewComment): String = when (comment.scope) {

@@ -21,6 +21,7 @@ dependencies {
         bundledPlugin("org.jetbrains.plugins.terminal")
         pluginVerifier()
     }
+    implementation("org.commonmark:commonmark:0.22.0")
     testImplementation("junit:junit:4.13.2")
 }
 
